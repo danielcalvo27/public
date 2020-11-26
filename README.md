@@ -1,4 +1,4 @@
-# Análisis espacial de la incidencia de cáncer de mama y próstata en Costa Rica
+# Análisis espacial de la incidencia de cáncer de mama y próstata en Costa Rica año 2014
 Artículos públicos o trabajos para compatir
 
 El documento de la investigación está disponible en el siguiente enlace: https://www.overleaf.com/read/qfyggnsmjdnn 
