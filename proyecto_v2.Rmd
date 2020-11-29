@@ -1,0 +1,609 @@
+---
+title: "Proyecto Estadística Espacial: Análisis espacial de la incidencia y mortalidad para cáncer de mama y próstata en Costa Rica "
+author: "Daniel Calvo"
+date: "9/14/2020"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, cache = T)
+```
+
+## Introducción
+
+```{r, include=F }
+#setwd("~/Documents/GitHub/EstadisticaEspacial_2020/Proyecto")
+suppressMessages( suppressWarnings( source("paquetes.R") ))  
+library(RColorBrewer)
+library(wesanderson)
+library(spdep)
+library(dplyr)
+library(raster)
+library(sf)
+library(openxlsx)
+library(spatialreg)
+library(scales)
+library(tmaptools)
+```
+
+## Datos
+
+Leyendo el shapefile del directorio, cargando del archivo de las covariables.
+
+```{r}
+#base de datos
+datos <- "mama_2015.shp" 
+datos %>% read_sf()  -> data
+
+data$NCANTON[14]<-'CAÑAS'
+data$NCANTON[81]<-'CORONADO'
+
+datosh <- "prostata_2015.shp" 
+datosh %>% read_sf()  -> datah
+
+datos_c <- read.xlsx("datos_proyecto3.xlsx",sheet = "CANTON_2014_incidencia")
+datos_ind <- read.xlsx("datos_proyecto3.xlsx",sheet = "variables independientes")
+
+names(datos_ind)
+datos_ind <- datos_ind %>% dplyr::select(Canton , ebais, hab_ebais) 
+
+## Datos cancér de mama
+datos_mama <- datos_c %>%  dplyr::select(CANTON, Poblacion_m, mama_n, mama_i , mama_n_m, mama_i_m, mama_50_mas,  Poblacion_h, IDH) 
+
+data2 <- data %>% left_join( x = data, y = datos_mama, by=c("NCANTON"="CANTON") )
+data2 <- data %>% left_join( x = data2, y = datos_ind, by=c("NCANTON"="Canton") )
+
+
+
+## Datos cancér de próstata
+datos_prostata <- datos_c %>%  dplyr::select(CANTON, Poblacion_h, Prostata_n, Prostata_i , prostata_n_m, prostata_i_m, prostata_50_mas, Poblacion_m, IDH) 
+
+data_h <- data %>% left_join( x = data, y = datos_prostata, by=c("NCANTON"="CANTON") )
+data_h <- data %>% left_join( x = data_h, y = datos_ind, by=c("NCANTON"="Canton") )
+
+
+```
+
+### Análisis descriptivo para el cáncer de mama
+
+```{r}
+# Frecuencia
+pal <- wes_palette("Zissou1", 100, type = "continuous")
+
+data2 <- data2 %>% rename( "Incidencia_tasa"= mama_i, "Mortalidad_tasa"=mama_i_m)
+
+data2_e <- as_Spatial( data2)
+
+# Frecuencia de casos identificados por cantón en el 2014
+
+breaks1 = c(0, 25, 35, 50, 100) 
+breaks = c(0, 10, 15, 30, 100) 
+
+
+#require(tmaptools)
+#tmap_arrange(map1, map2)
+
+gry <- c(rev(brewer.pal(6, "Blues")), brewer.pal(7, "Reds"))
+spplot(data2_e, "Incidencia_tasa", col.regions=gry, col="transparent", lwd=0.5, 
+       at=seq(0,127,10) )
+
+```
+
+
+### Análisis descriptivo para el cáncer de próstata
+
+```{r}
+# Frecuencia
+pal <- wes_palette("Zissou1", 100, type = "continuous")
+
+data_h <- data_h %>% rename( "Incidencia_tasa"= Prostata_i, "Mortalidad_tasa"= prostata_i_m)
+data2_h <- as_Spatial( data_h)
+# Frecuencia de casos identificados por cantón en el 2014
+
+data_h$Incidencia_tasa_est <- rescale(data_h$Incidencia_tasa)*100
+data_h$Mortalidad_tasa_est <- rescale(data_h$Mortalidad_tasa)*100
+
+
+breaks1 = c(0, 25, 40, 60, 100) 
+breaks = c(0, 20, 30, 50, 100) 
+
+
+# Incidencia relativa de casos identificados por cantón por 100 000 habitantes por cantón en 2014
+
+map1_h <- tm_shape(data_h) + tm_polygons(col = "Incidencia_tasa_est", breaks = breaks1, 
+                              labels=c("0-25","25-40","40-60","60-100"), palette = pal)+
+  tm_layout(title = "Cáncer de próstata 2014", legend.outside = T) 
+
+# tasa de mortalidad
+map2_h <- tm_shape(data_h) + tm_polygons(col = "Mortalidad_tasa_est", breaks = breaks, 
+                              labels=c("0-20","20-30","30-50","50-100"), palette = pal)+
+  tm_layout(title = "Cáncer de próstata 2014", legend.outside = T) 
+
+#require(tmaptools)
+#tmap_arrange(map1_h, map2_h)
+
+names(data2_e)
+gry <- c(rev(brewer.pal(6, "Blues")), brewer.pal(7, "Reds"))
+spplot(data2_h, "Incidencia_tasa", col.regions=gry, col="transparent", lwd=0.5, 
+       at=seq(0,91,7.5) )
+
+```
+
+### Análisis Modelos cancer de mama
+
+Modelando la matriz de vecinos
+```{r}
+
+#data_m <- data2
+##%>% dplyr::select(NCANTON,  geometry, Incidencia )
+
+coor <-  coordinates(data2_e)
+# reina
+data_m_nb <- poly2nb(data2_e, row.names= data2_e$NCANTON)
+
+plot(data2_e, border="grey60", axes=TRUE,  col='gray')
+plot(data_m_nb, coor, pch=19, cex=0.6, add=TRUE, col='red', lwd=2 )
+
+# torre
+data_m_nb_r <- poly2nb(data2_e, queen = FALSE , row.names= data2_e$NCANTON)
+
+plot(data2_e, border="grey60", axes=TRUE,  col='gray')
+plot(data_m_nb_r, coor, pch=19, cex=0.6, add=TRUE, col='red', lwd=2 )
+
+
+```
+
+
+```{r}
+ww <-  nb2listw(data_m_nb, style='B' )
+
+### conteo
+
+### test mora de los residuos
+lm.morantest(lm(data2_e$mama_n ~ 1, data2_e), listw=ww)
+
+### test moran versión exacta, asume normalidad
+lm.morantest.exact(lm(data2_e$mama_n  ~ 1, data2_e), listw=ww)
+
+### test moran versión punto silla, no asumen normalidad
+lm.morantest.sad(lm(data2_e$mama_n ~ 1, data2_e), listw=ww)
+
+### EBI moran monte carlo
+EBImoran.mc(n=data2_e$mama_n, x=data2_e$Poblacion_m, listw=ww, nsim=999)
+
+### tasa de incidencia
+
+### test mora de los residuos
+lm.morantest(lm(data2_e$Incidencia_tasa ~ 1, data2_e), listw=ww)
+
+### test moran versión exacta, asume normalidad
+lm.morantest.exact(lm(data2_e$Incidencia_tasa  ~ 1, data2_e), listw=ww)
+
+### test moran versión punto silla, no asumen normalidad
+lm.morantest.sad(lm(data2_e$Incidencia_tasa ~ 1, data2_e), listw=ww)
+
+### EBI moran monte carlo
+EBImoran.mc(n=data2_e$Incidencia_tasa, x=data2_e$Poblacion_m, listw=ww, nsim=999)
+
+```
+
+
+```{r, eval=FALSE}
+oopar <- par(mfrow=c(1,2))
+msp <- moran.plot(data2_e$mama_n, listw=nb2listw(data_m_nb, style="C"), quiet=TRUE)
+title("Moran scatterplot")
+infl <- apply(msp["is_inf"], 1, any)
+x <- data2_e$mama_n
+lhx <- cut(x, breaks=c(min(x), mean(x), max(x)), labels=c("L", "H"), include.lowest=TRUE)
+wx <- lag(  nb2listw(data_m_nb, style="C"), 1)
+?lag
+```
+
+
+
+```{r}
+## moran.plot(NY8$Cases, listw=nb2listw(NY_nb, style="C"))
+lm1 <- localmoran(data2_e$mama_n, listw=nb2listw(data_m_nb, style="B"))
+lm2 <- as.data.frame(localmoran.sad(lm(data2_e$mama_n ~ 1, data2_e), nb=data_m_nb, style="B"))
+lm3 <- as.data.frame(localmoran.exact(lm(data2_e$mama_n ~ 1, data2_e), nb=data_m_nb, style="B"))
+#lm4 <- as.data.frame(EBImoran.mc(n=data2_e$mama_n, x=data2_e$Poblacion_m, listw=ww, nsim=999))
+
+
+data2_e$Normal <- lm2[,3]
+data2_e$Randomisation <- lm1[,5]
+data2_e$Saddlepoint <- lm2[,5]
+data2_e$Exact <- lm3[,5]
+
+gry <- c(rev(brewer.pal(6, "Reds")), brewer.pal(6, "Blues"))
+spplot(data2_e, c("Normal", "Randomisation", "Saddlepoint", "Exact"), at=c(0,0.01,0.05,0.1,0.9,0.95,0.99,1), col.regions=colorRampPalette(gry)(7))
+```
+
+
+
+Modelo lineal
+
+```{r}
+data2_e$mama_50_mas_perc <- data2_e$mama_50_mas/ data2_e$Poblacion_m
+data2_e$hab_ebais_perc <- data2_e$hab_ebais/ (data2_e$Poblacion_m+data2_e$Poblacion_h)
+```
+
+
+```{r}
+# incidencia
+View(data2_e)
+mamalm <- lm(mama_n ~ IDH +  mama_50_mas_perc + hab_ebais_perc, data=data2_e)
+summary(mamalm)
+AIC(mamalm)
+
+data2_e$lmresid_inc <- residuals(mamalm)
+
+```
+
+
+Modelo lineal ponderado por población
+
+```{r,eval=FALSE}
+data2_e$mama_50_mas_perc <- data2_e$mama_50_mas/ data2_e$Poblacion_m
+data2_e$hab_ebais_perc <- data2_e$hab_ebais/ (data2_e$Poblacion_m+data2_e$Poblacion_h)
+
+mamalm_w <- lm(mama_n ~ IDH +  mama_50_mas_perc + hab_ebais_perc, weights = Poblacion_m
+               , data=data2_e)
+
+AIC(mamalm_w)
+summary(mamalm_w)
+
+data2_e$lmresid_inc_w <- residuals(mamalm_w)
+```
+
+```{r, eval=FALSE}
+lm.morantest(mamalm, ww)
+
+lm.morantest(mamalm_w, ww)
+```
+
+
+
+SAR modelos autoregresivos simultaneos
+
+```{r}
+names(data2_e)
+mama_sar_inc<- spautolm(mama_n ~ IDH +  mama_50_mas_perc + hab_ebais_perc 
+                                                            , data=data2_e, listw=ww)
+
+
+data2_e$sar_resid_inc <- residuals(mama_sar_inc )
+moran.test(data2_e$sar_resid_inc, ww)
+
+```
+
+
+SAR modelos autoregresivos simultaneos por pesos
+
+```{r}
+mama_sar_inc_w<- spautolm(mama_n ~ IDH +  mama_50_mas_perc + hab_ebais_perc 
+                                      , data=data2_e, listw=ww ,  weights=Poblacion_m)
+
+data2_e$sar_resid_inc_w <- residuals(mama_sar_inc_w )
+```
+
+
+
+CAR modelos autoregresivos simultaneos
+
+```{r}
+mama_car_inc<- spautolm(mama_n ~ IDH +  mama_50_mas_perc + hab_ebais_perc 
+                                                            , data=data2_e, listw=ww,  family="CAR")
+summary(mama_car_inc)
+
+data2_e$car_resid_inc <- residuals(mama_car_inc )
+
+
+```
+
+CAR modelos autoregresivos condicional por pesos
+
+```{r}
+mama_car_inc_w<- spautolm(mama_n ~ IDH +  mama_50_mas_perc + hab_ebais_perc 
+                                  , data=data2_e, listw=ww,  family="CAR",  weights=Poblacion_m)
+summary(mama_car_inc_w)
+
+data2_e$car_resid_inc_w <- residuals(mama_car_inc_w )
+```
+
+
+Gráfico de todos los modelos
+
+```{r}
+quantile(data2_e$lmresid_inc)
+quantile(data2_e$lmresid_inc_w)
+quantile(data2_e$sar_resid_inc)
+quantile(data2_e$sar_resid_inc_w)
+quantile(data2_e$car_resid_inc)
+quantile(data2_e$car_resid_inc_w)
+
+gry <- c(rev(brewer.pal(9, "Reds")[1:9]), colorRampPalette(brewer.pal(5, "Blues"))(9))
+##TCEpts <- list("sp.points", TCE, pch=16, col="grey5")
+spplot(data2_e, c("lmresid_inc",
+                  "sar_resid_inc",
+                  "car_resid_inc"
+                  ), col.regions=gry, col="transparent", lwd=0.5, at= seq(-91,140,13) )
+
+spplot(data2_e, c("lmresid_inc_w",
+                  "sar_resid_inc_w",
+                  "car_resid_inc_w"
+                  ), col.regions=gry, col="transparent", lwd=0.5, at= seq(-91,140,13) )
+```
+
+
+
+GLM poisson
+
+```{r}
+
+names(data2_e)
+GLM_pos <- glm(mama_n ~ IDH +  mama_50_mas_perc + hab_ebais_perc
+               , data=data2_e, family="poisson")
+summary(GLM_pos)
+
+names(data2_e)
+GLM_pos_w <- glm(mama_n ~ IDH +  mama_50_mas_perc + hab_ebais_perc
+               +offset(log(Poblacion_m)), data=data2_e, family="poisson")
+summary(GLM_pos_w)
+
+```
+
+Residuales
+
+```{r}
+
+data2_e$glmresid_inc <- residuals(GLM_pos, type="deviance")
+data2_e$glmresid_inc_W <- residuals(GLM_pos_w, type="deviance")
+
+quantile(data2_e$glmresid_inc)
+quantile(data2_e$glmresid_inc_W)
+
+
+gry <- c(rev(brewer.pal(6, "Reds")), brewer.pal(7, "Blues"))
+spplot(data2_e, c("glmresid_inc","glmresid_inc_W"), col.regions=gry, col="transparent", lwd=0.5, at=seq(-91,140,13))
+```
+
+Prueba de Mora modelo de Poisson
+
+```{r}
+lm.morantest(GLM_pos, listw=ww)
+
+lm.morantest(GLM_pos_w, listw=ww)
+```
+
+
+
+### Análisis Modelos cancer de próstata
+
+Modelando la matriz de vecinos
+```{r}
+names(data_h)
+#data_m <- data2
+##%>% dplyr::select(NCANTON,  geometry, Incidencia 
+
+coor <-  coordinates(data2_e)
+# reina
+data_m_nb <- poly2nb(data2_e, row.names= data2_e$NCANTON)
+
+plot(data2_e, border="grey60", axes=TRUE,  col='gray')
+plot(data_m_nb, coor, pch=19, cex=0.6, add=TRUE, col='red', lwd=2 )
+
+# torre
+data_m_nb_r <- poly2nb(data2_e, queen = FALSE , row.names= data2_e$NCANTON)
+
+plot(data2_e, border="grey60", axes=TRUE,  col='gray')
+plot(data_m_nb_r, coor, pch=19, cex=0.6, add=TRUE, col='red', lwd=2 )
+
+
+```
+
+
+```{r}
+
+### conteo
+
+### test mora de los residuos
+lm.morantest(lm(data2_h$Prostata_n ~ 1, data2_h), listw=ww)
+
+### test moran versión exacta, asume normalidad
+lm.morantest.exact(lm(data2_h$Prostata_n  ~ 1, data2_h), listw=ww)
+
+### test moran versión punto silla, no asumen normalidad
+lm.morantest.sad(lm(data2_h$Prostata_n ~ 1, data2_h), listw=ww)
+
+### EBI moran monte carlo
+EBImoran.mc(n=data2_h$Prostata_n, x=data2_h$Poblacion_h, listw=ww, nsim=999)
+
+### tasa de incidencia
+
+### test mora de los residuos
+lm.morantest(lm(data2_h$Incidencia_tasa ~ 1, data2_h), listw=ww)
+
+### test moran versión exacta, asume normalidad
+lm.morantest.exact(lm(data2_h$Incidencia_tasa  ~ 1, data2_h), listw=ww)
+
+### test moran versión punto silla, no asumen normalidad
+lm.morantest.sad(lm(data2_h$Incidencia_tasa ~ 1, data2_h), listw=ww)
+
+### EBI moran monte carlo
+EBImoran.mc(n=data2_h$Incidencia_tasa, x=data2_h$Poblacion_h, listw=ww, nsim=999)
+
+```
+
+
+```{r}
+## moran.plot(NY8$Cases, listw=nb2listw(NY_nb, style="C"))
+lm11 <- localmoran(data2_h$Prostata_n, listw=nb2listw(data_m_nb, style="B"))
+lm22 <- as.data.frame(localmoran.sad(lm(data2_h$Prostata_n ~ 1, data2_e), nb=data_m_nb, style="B"))
+lm33 <- as.data.frame(localmoran.exact(lm(data2_h$Prostata_n ~ 1, data2_e), nb=data_m_nb, style="B"))
+#lm4 <- as.data.frame(EBImoran.mc(n=data2_e$mama_n, x=data2_e$Poblacion_m, listw=ww, nsim=999))
+
+
+
+data2_h$Normal <- lm22[,3]
+data2_h$Randomisation <- lm11[,5]
+data2_h$Saddlepoint <- lm22[,5]
+data2_h$Exact <- lm33[,5]
+
+gry <- c(rev(brewer.pal(6, "Reds")), brewer.pal(6, "Blues"))
+spplot(data2_h, c("Normal", "Randomisation", "Saddlepoint", "Exact"), at=c(0,0.01,0.05,0.1,0.9,0.95,0.99,1), col.regions=colorRampPalette(gry)(7))
+```
+
+
+
+Modelo lineal
+
+```{r}
+# incidencia
+
+names(data2_h)
+data2_h$prostata_50_mas <- data2_h$prostata_50_mas/ data2_h$Poblacion_h
+data2_h$hab_ebais_perc <- data2_h$hab_ebais/ (data2_h$Poblacion_m+data2_h$Poblacion_h)
+
+proslm <- lm(Prostata_n ~ IDH +  prostata_50_mas + hab_ebais_perc, data=data2_h)
+summary(proslm)
+AIC(proslm)
+
+data2_h$lmresid_inc <- residuals(proslm)
+
+```
+
+
+Modelo lineal ponderado por poblacion
+
+```{r}
+names(data2_h)
+proslm_w <- lm(Prostata_n ~ IDH +  prostata_50_mas + hab_ebais_perc, weights = Poblacion_h
+               , data=data2_h)
+
+AIC(proslm_w)
+summary(proslm_w)
+
+data2_h$lmresid_inc_w <- residuals(proslm_w)
+```
+
+```{r}
+lm.morantest(proslm, ww)
+
+lm.morantest(proslm_w, ww)
+```
+
+
+
+SAR modelos autoregresivos simultaneos
+
+```{r}
+pros_sar_inc<- spautolm(Prostata_n ~ IDH +  prostata_50_mas + hab_ebais_perc 
+                                                            , data=data2_h, listw=ww)
+summary(pros_sar_inc)
+
+data2_h$sar_resid_inc <- residuals(pros_sar_inc )
+
+
+```
+
+
+SAR modelos autoregresivos simultaneos por pesos
+
+```{r}
+pros_sar_inc_w<- spautolm(Prostata_n ~ IDH +  prostata_50_mas + hab_ebais_perc 
+                                      , data=data2_h, listw=ww ,  weights=Poblacion_h)
+summary(pros_sar_inc_w)
+
+data2_h$sar_resid_inc_w <- residuals(pros_sar_inc_w )
+```
+
+
+
+CAR modelos autoregresivos simultaneos
+
+```{r}
+pros_car_inc<- spautolm(Prostata_n ~ IDH +  prostata_50_mas + hab_ebais_perc 
+                                                            , data=data2_h, listw=ww,  family="CAR")
+summary(pros_car_inc)
+
+data2_h$car_resid_inc <- residuals(pros_car_inc )
+
+
+mama_sar_mort<-spautolm(Mortalidad_tasa_est~ IDH + rescale( mama_50_mas ) + rescale( ebais ) 
+                                                            , data=data2, listw=ww)
+summary(mama_sar_mort)
+
+```
+
+CAR modelos autoregresivos condicional por pesos
+
+```{r}
+pros_car_inc_w<- spautolm(Prostata_n ~ IDH +  prostata_50_mas + hab_ebais_perc 
+                                  , data=data2_h, listw=ww,  family="CAR",  weights=Poblacion_h)
+summary(pros_car_inc_w)
+
+data2_h$car_resid_inc_w <- residuals(pros_car_inc_w )
+```
+
+
+Gráfico de todos los modelos
+
+```{r}
+
+gry <- c(rev(brewer.pal(9, "Reds")[1:9]), colorRampPalette(brewer.pal(5, "Blues"))(9))
+##TCEpts <- list("sp.points", TCE, pch=16, col="grey5")
+spplot(data2_h, c("lmresid_inc",
+                  "sar_resid_inc",
+                  "car_resid_inc"
+                  ), col.regions=gry, col="transparent", lwd=0.5, at= seq(-56,104,9) )
+
+spplot(data2_h, c("lmresid_inc_w",
+                  "sar_resid_inc_w",
+                  "car_resid_inc_w"
+                  ), col.regions=gry, col="transparent", lwd=0.5, at= seq(-56,104,9) )
+```
+
+
+
+GLM poisson
+
+```{r}
+
+GLM_pos_h <- glm(Prostata_n ~ IDH +  prostata_50_mas + hab_ebais_perc
+               , data=data2_h, family="poisson")
+summary(GLM_pos_h)
+AIC(GLM_pos_h)
+
+names(data2_h)
+GLM_pos_h_w <- glm(Prostata_n ~ IDH +  prostata_50_mas + hab_ebais_perc
+               +offset(log(Poblacion_h)), data=data2_h, family="poisson")
+summary(GLM_pos_h_w)
+
+
+```
+
+Residuales
+
+```{r}
+
+data2_h$glmresid_inc <- residuals(GLM_pos_h, type="deviance")
+data2_h$glmresid_inc_W <- residuals(GLM_pos_h_w, type="deviance")
+
+quantile(data2_h$glmresid_inc)
+quantile(data2_h$glmresid_inc_W)
+
+
+gry <- c(rev(brewer.pal(6, "Reds")), brewer.pal(7, "Blues"))
+spplot(data2_h, c("glmresid_inc","glmresid_inc_W"), col.regions=gry, col="transparent", lwd=0.5, at=seq(-56,104,9))
+```
+
+Prueba de Mora modelo de Poisson
+
+```{r}
+lm.morantest(GLM_pos_h, listw=ww)
+
+lm.morantest(GLM_pos_h_w, listw=ww)
+```
+
+
+
